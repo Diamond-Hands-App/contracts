@@ -58,7 +58,7 @@ contract DiamondHands is ReentrancyGuard {
     mapping(address => uint32) totalRefs;
     mapping(address => uint256) totalRefGains;
 
-    event InHold(bool indexed isPureEther, uint256 holdAtTimestamp);
+    event InHold(uint32 id, bool indexed isPureEther, uint256 holdAtTimestamp);
     event UntilDate(uint256 holdUntilTimestamp);
     event UntilPriceWETH(uint256 holdAtPriceInWETH, uint256 holdUntilPriceInWETH);
     event UntilPriceUSD(uint256 holdAtPriceInUSD, uint256 holdUntilPriceInUSD);
@@ -90,13 +90,13 @@ contract DiamondHands is ReentrancyGuard {
         require(freezeForSeconds > 0 || freezeForX > 0, "Any type of freeze hasnt provided");
 
         // Distribute the fees
-        distributeDepositFees(refcode, etherFee);
+        distributeDepositFees(refcode, msg.value - freezeAmount);
 
         // Init freeze
         id++;
         holdings[id].isPureEther = true;
         holdings[id].holdAtTimestamp = block.timestamp;
-        emit InHold(true, block.timestamp);
+        emit InHold(id, true, block.timestamp);
 
         // Optional time related freeze
         if (freezeForSeconds > 0) {
@@ -144,12 +144,12 @@ contract DiamondHands is ReentrancyGuard {
         IERC20(token).transferFrom(msg.sender, address(this), freezeAmount);
 
         // Distribute the fees
-        distributeDepositFees(refcode, etherFee);
+        distributeDepositFees(refcode, msg.value);
 
         // Init freeze
         id++;
         holdings[id].holdAtTimestamp = block.timestamp;
-        emit InHold(true, block.timestamp);
+        emit InHold(id, true, block.timestamp);
 
         // Optional time related freeze
         if (freezeForSeconds > 0) {
@@ -200,7 +200,7 @@ contract DiamondHands is ReentrancyGuard {
         holdings[_id].isActive = false;
 
         // Distribute the fees
-        distributeWithdrawalFees(_id, etherFee);
+        distributeWithdrawalFees(_id, msg.value);
 
         // Check eligibility
         if (holdings[_id].holdUntilTimestamp > 0 && block.timestamp > holdings[_id].holdUntilTimestamp) {
@@ -228,7 +228,7 @@ contract DiamondHands is ReentrancyGuard {
         holdings[_id].isActive = false;
 
         // Distribute the fees
-        distributeWithdrawalFees(_id, etherFee);
+        distributeWithdrawalFees(_id, msg.value);
 
         // Check eligibility
         address payable holder = payable(holdings[_id].user);
@@ -332,23 +332,23 @@ contract DiamondHands is ReentrancyGuard {
         uint256 serviceShare = etherFee;
         uint256 discountShare = etherFee * 20 / 100;
         uint256 refShare = etherFee * 30 / 100;
-        address payable inviter = payable(whosReferred[msg.sender]);
-        address payable pendingInvite = payable(getRefAddressByRefCode(refcode));
-        if (inviter != address(0) && inviter != msg.sender) isAbleForRefReward = true;
-        if (inviter == address(0) && pendingInvite != address(0)) {
-            totalRefs[inviter]++;
-            whosReferred[msg.sender] = pendingInvite;
-            inviter = pendingInvite;
+        address payable prevInviter = payable(whosReferred[msg.sender]);
+        address payable currentInviteFrom = payable(getRefAddressByRefCode(refcode));
+        if (prevInviter != address(0) && prevInviter != msg.sender && currentInviteFrom != msg.sender) isAbleForRefReward = true;
+        if (prevInviter == address(0) && currentInviteFrom != address(0) && currentInviteFrom != msg.sender) {
+            totalRefs[currentInviteFrom]++;
+            whosReferred[msg.sender] = currentInviteFrom;
             isAbleForRefReward = true;
+            prevInviter = currentInviteFrom;
         }
         if (isAbleForRefReward) {
-            inviter.transfer(refShare);
+            prevInviter.transfer(refShare);
             payable(msg.sender).transfer(discountShare);
-            totalRefGains[inviter] += refShare;
+            totalRefGains[prevInviter] += refShare;
             serviceShare = etherFee * 50 / 100;
         }
         unclaimedRevenue += serviceShare;
-        emit Revenues(inviter, isAbleForRefReward ? refShare : 0, serviceShare);
+        emit Revenues(prevInviter, isAbleForRefReward ? refShare : 0, serviceShare);
     }
 
     function distributeWithdrawalFees(uint32 _id, uint256 etherFee) private {
@@ -370,7 +370,7 @@ contract DiamondHands is ReentrancyGuard {
 
     function setFees(uint8 newDepositFee, uint8 newWithdrawalFee) public {
         require(msg.sender == owner);
-        require(newDepositFee < 5 && newWithdrawalFee < 5, "Max possible fee is 5%");
+        require(newDepositFee <= 5 && newWithdrawalFee <= 5, "Max possible fee is 5%");
         depositFee = newDepositFee;
         withdrawalFee = newWithdrawalFee;
     }
